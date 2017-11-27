@@ -54,6 +54,7 @@ static void signal_handler(int signum)
 	}
 }
 
+//每个逻辑核都做自己独立的活，下面主要分为三个线程，分别为收包、流管理、解析器
 int app_lcore_main_loop(__attribute__((unused)) void *arg)
 {
 	struct app_lcore_params *lp;
@@ -62,17 +63,21 @@ int app_lcore_main_loop(__attribute__((unused)) void *arg)
 	lcore = rte_lcore_id();
 	lp = &app.lcore_params[lcore];
 
+	//接收包
 	if (lp->type == e_APP_LCORE_IO) {
 		printf("Logical core %u (I/O) main loop.\n", lcore);
 		app_lcore_main_loop_io();
 	}
 
+	//流管理
 	if (lp->type == e_APP_LCORE_FLOW) {
-		printf("Logical core %u (Flow)main loop.\n", lcore);
+		printf("Logical core %u (Flow Manage) main loop.\n", lcore);
+		app_lcore_main_loop_flow();
 	}
 
-	if (lp->type == e_APP_LCORE_WORK) {
-			printf("Logical core %u (worker) main loop.\n", lcore);
+	//包解析器
+	if (lp->type == e_APP_LCORE_DISSECTOR) {
+			printf("Logical core %u (Dissector) main loop.\n", lcore);
 	}
 	return 0;
 }

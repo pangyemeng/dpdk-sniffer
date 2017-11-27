@@ -38,7 +38,7 @@
 #include <rte_lpm.h>
 
 #include "../common/config.h"
-#include "../common/flow.h"
+#include "../flow/flow.h"
 #include "capture.h"
 #include "../dissector/packet.h"
 #include "../dissector/dissector.h"
@@ -122,11 +122,55 @@ static inline void app_lcore_io_rx_flush(struct app_lcore_params_io *lp)
 	lp->rx.mbuf_out_flush[0] = 1;
 }
 
+//从接收缓存中取出数据包放入流管理环形队列
+static inline void app_lcore_io_rx_buffer_to_flow(struct app_lcore_params_io *lp, uint32_t flow_id, struct rte_mbuf *mbuf, uint32_t bsz)
+{
+	uint32_t pos;
+	int ret;
+
+	pos = lp->rx.mbuf_out[flow_id].n_mbufs;
+	lp->rx.mbuf_out[flow_id].array[pos++] = mbuf;
+	if (likely(pos < bsz))
+	{
+		lp->rx.mbuf_out[flow_id].n_mbufs = pos;
+		return;
+	}
+
+	ret = rte_ring_sp_enqueue_bulk(lp->rx.rings[flow_id], (void **) lp->rx.mbuf_out[flow_id].array, bsz);
+
+	if (unlikely(ret == -ENOBUFS))
+	{
+		uint32_t k;
+		for (k = 0; k < bsz; k++)
+		{
+			struct rte_mbuf *m = lp->rx.mbuf_out[flow_id].array[k];
+			rte_pktmbuf_free(m);
+		}
+	}
+
+	lp->rx.mbuf_out[flow_id].n_mbufs = 0;
+	lp->rx.mbuf_out_flush[flow_id] = 0;
+
+#if APP_STATS
+	lp->rx.rings_iters[flow_id]++;
+	if (likely(ret == 0))
+	{
+		lp->rx.rings_count[flow_id]++;
+	}
+	if (unlikely(lp->rx.rings_iters[flow_id] == APP_STATS))
+	{
+		unsigned lcore = rte_lcore_id();
+
+		printf("\tI/O RX %u out (worker %u): enq success rate = %.2f\n", lcore, (unsigned) flow_id, ((double) lp->rx.rings_count[flow_id]) / ((double) lp->rx.rings_iters[flow_id]));
+		lp->rx.rings_iters[flow_id] = 0;
+		lp->rx.rings_count[flow_id] = 0;
+	}
+#endif
+}
+
 static inline void app_lcore_io_rx(struct app_lcore_params_io *lp, uint32_t bsz_rd, uint32_t bsz_wr)
 {
 	static long pkt_num = 0;
-	struct rte_mbuf *mbuf_1_0, *mbuf_1_1, *mbuf_2_0, *mbuf_2_1;
-	uint8_t *data_1_0, *data_1_1 = NULL;
 	uint32_t i;
 
 	for (i = 0; i < lp->rx.n_nic_queues; i++)
@@ -140,6 +184,12 @@ static inline void app_lcore_io_rx(struct app_lcore_params_io *lp, uint32_t bsz_
 		if (unlikely(n_mbufs == 0))
 		{
 			continue;
+		}
+		//将包放入环形队列
+		for (j = 0; j < n_mbufs; j ++)
+		{
+			struct rte_mbuf *pkt = lp->rx.mbuf_in.array[j];
+			app_lcore_io_rx_buffer_to_flow(lp, 0, pkt, bsz_wr);
 		}
 
 #if APP_STATS
@@ -169,6 +219,9 @@ static inline void app_lcore_io_rx(struct app_lcore_params_io *lp, uint32_t bsz_
 
 		continue;
 #endif
+
+
+#if 0
 		//此处对数据包进行解包
 		packet_t pkt;
 		ipv4_flow_t *flow;
@@ -183,16 +236,16 @@ static inline void app_lcore_io_rx(struct app_lcore_params_io *lp, uint32_t bsz_
 				if (para.proto == IPPROTO_TCP)
 				{
 					pkt_num++;
-					printf("pkt_num %d\n", pkt_num);
 					flow = create_flow_ipv4(rte_socket_id(), &para, mbuf);
 					printf("flow:"
-						"\n flow length:  %d"
-						"\n ipv4_5tupl %u %u %u %u %u \n", flow->pkt_num, flow->sip, flow->dip, flow->sport, flow->dport, flow->proto);
+							"\n flow length:  %d"
+							"\n ipv4_5tupl %u %u %u %u %u \n", flow->pkt_num, flow->sip, flow->dip, flow->sport, flow->dport, flow->proto);
 				}
 			}
 		}
-
+#endif
 	}
+
 }
 
 //仅捕获包 嗅探设备无转发包

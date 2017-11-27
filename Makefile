@@ -7,7 +7,7 @@ SUCCESS="\\033[1;32m"
 FAILURE="\\033[1;31m"
 
 # sub directory
-SUBDIRS = common capture dissector
+SUBDIRS = common capture flow dissector
 
 # sniffer library
 SNIFFER_LIB = 
@@ -56,7 +56,7 @@ SRC = sniffer.c
 # compilation
 INCLUDE_DIR = -I$(DPDK_INCLUDE_PATH)
 LDFLAGS =  -Wl,--whole-archive -lpthread $(DPDK_LIBS) $(ROOT_DIR)/common/libcommon.so $(ROOT_DIR)/capture/libcapture.so \
-$(ROOT_DIR)/dissector/libdissector.so \
+$(ROOT_DIR)/flow/libflow.so $(ROOT_DIR)/dissector/libdissector.so \
 -lrt -lm -ldl  -Wl,--no-whole-archive
 CFLAGS = -Wall -Wextra -ffunction-sections -include $(RTE_SDK)/${RTE_TARGET}/include/rte_config.h -msse4.2 $(INCLUDE_DIR)  -march=native
 

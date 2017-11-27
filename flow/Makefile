@@ -10,10 +10,10 @@ SUCCESS="\\033[1;32m"
 FAILURE="\\033[1;31m"
 
 #targets
-LIBTARGET = libcommon.so 
+LIBTARGET = libflow.so 
 
 #objects
-OBJS = config.o init.o 
+OBJS = flow.o tcp_manager.o
 
 #special CFLAGS 
 CFLAGS += -fPIC

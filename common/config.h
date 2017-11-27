@@ -40,11 +40,11 @@
 #error "APP_MAX_NIC_TX_PORTS_PER_IO_LCORE too big"
 #endif
 
-#ifndef APP_MAX_WORKER_LCORES
-#define APP_MAX_WORKER_LCORES 16
+#ifndef APP_MAX_FLOW_LCORES
+#define APP_MAX_FLOW_LCORES 1
 #endif
-#if (APP_MAX_WORKER_LCORES > APP_MAX_LCORES)
-#error "APP_MAX_WORKER_LCORES is too big"
+#if (APP_MAX_FLOW_LCORES > APP_MAX_LCORES)
+#error "APP_MAX_FLOW_LCORES is too big"
 #endif
 
 #ifndef APP_MAX_FLOW_LCORES
@@ -160,18 +160,11 @@
 #error "APP_DEFAULT_BURST_SIZE_IO_RX_WRITE is too big"
 #endif
 
-#ifndef APP_DEFAULT_BURST_SIZE_IO_TX_READ
-#define APP_DEFAULT_BURST_SIZE_IO_TX_READ  144
+#ifndef APP_DEFAULT_BURST_SIZE_FLOW_READ
+#define APP_DEFAULT_BURST_SIZE_FLOW_READ  144
 #endif
-#if (APP_DEFAULT_BURST_SIZE_IO_TX_READ > APP_MBUF_ARRAY_SIZE)
-#error "APP_DEFAULT_BURST_SIZE_IO_TX_READ is too big"
-#endif
-
-#ifndef APP_DEFAULT_BURST_SIZE_IO_TX_WRITE
-#define APP_DEFAULT_BURST_SIZE_IO_TX_WRITE  144
-#endif
-#if (APP_DEFAULT_BURST_SIZE_IO_TX_WRITE > APP_MBUF_ARRAY_SIZE)
-#error "APP_DEFAULT_BURST_SIZE_IO_TX_WRITE is too big"
+#if ((2 * APP_DEFAULT_BURST_SIZE_FLOW_READ) > APP_MBUF_ARRAY_SIZE)
+#error "APP_DEFAULT_BURST_SIZE_WORKER_READ is too big"
 #endif
 
 
@@ -179,7 +172,7 @@ enum app_lcore_type {
 	e_APP_LCORE_DISABLED = 0,
 	e_APP_LCORE_IO,
 	e_APP_LCORE_FLOW,
-	e_APP_LCORE_WORK
+	e_APP_LCORE_DISSECTOR
 };
 
 struct app_mbuf_array {
@@ -198,19 +191,20 @@ struct app_lcore_params_io {
 		uint32_t n_nic_queues;
 
 		/* Rings*/
-		struct rte_ring *rings[APP_MAX_WORKER_LCORES];
+		struct rte_ring *rings[APP_MAX_FLOW_LCORES];
 		uint32_t n_rings;
 
 		/* Internal buffers */
 		struct app_mbuf_array mbuf_in;
-		struct app_mbuf_array mbuf_out[APP_MAX_WORKER_LCORES];
-		uint8_t mbuf_out_flush[APP_MAX_WORKER_LCORES];
+		struct app_mbuf_array mbuf_out[APP_MAX_FLOW_LCORES];
+
+		uint8_t mbuf_out_flush[APP_MAX_FLOW_LCORES];
 
 		/* Stats */
 		uint32_t nic_queues_count[APP_MAX_NIC_RX_QUEUES_PER_IO_LCORE];
 		uint32_t nic_queues_iters[APP_MAX_NIC_RX_QUEUES_PER_IO_LCORE];
-		uint32_t rings_count[APP_MAX_WORKER_LCORES];
-		uint32_t rings_iters[APP_MAX_WORKER_LCORES];
+		uint32_t rings_count[APP_MAX_FLOW_LCORES];
+		uint32_t rings_iters[APP_MAX_FLOW_LCORES];
 	} rx;
 };
 
@@ -219,44 +213,45 @@ struct app_lcore_params_flow{
 	struct rte_ring *rings_in[APP_MAX_IO_LCORES];
 	uint32_t n_rings_in;
 
+	struct app_mbuf_array mbuf_in;
+
 	/* Stats */
 	uint32_t rings_in_count[APP_MAX_IO_LCORES];
 	uint32_t rings_in_iters[APP_MAX_IO_LCORES];
 };
 
 /* 解析处理队列*/
-struct app_lcore_params_worker {
+struct app_lcore_params_dissector {
 
 };
 
 struct app_lcore_params {
 	union {
-		struct app_lcore_params_io io;
-		struct app_lcore_params_flow flow;
-		struct app_lcore_params_worker worker;
+		struct app_lcore_params_io io;  //收包
+		struct app_lcore_params_flow flow; //流管理
+		struct app_lcore_params_dissector dissector; //解析器
 	};
-	enum app_lcore_type type;
-	struct rte_mempool *pool;
+	enum app_lcore_type type; //逻辑核角色类型
+	struct rte_mempool *pool; //内存池
 } __rte_cache_aligned;
 
 
+//总个APP配置结构，考虑到多核编程的性能，这个结构每个逻辑核共享，其中很多结构都是每个逻辑核一份
 struct app_params {
 	/* lcore */
 	struct app_lcore_params lcore_params[APP_MAX_LCORES];
-
 	/* NIC */
 	uint8_t nic_rx_queue_mask[APP_MAX_NIC_PORTS][APP_MAX_RX_QUEUES_PER_NIC_PORT];
-
 	/* mbuf pools */
 	struct rte_mempool *pools[APP_MAX_SOCKETS];
-
 	/* rings */
 	uint32_t nic_rx_ring_size;
 	uint32_t ring_rx_size;
-
 	/* burst size */
 	uint32_t burst_size_io_rx_read;
 	uint32_t burst_size_io_rx_write;
+	//一次从环形缓冲中提取多少数据
+	uint32_t burst_size_flow_read;
 } __rte_cache_aligned;
 
 extern struct app_params app;

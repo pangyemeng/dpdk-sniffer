@@ -9,7 +9,11 @@
 #include <rte_hash_crc.h>
 #include <rte_mbuf.h>
 
-#include "common.h"
+#include "../common/common.h"
+#include "../common/config.h"
+#include "../dissector/packet.h"
+#include "../dissector/dissector.h"
+
 
 #include "flow.h"
 
@@ -42,11 +46,8 @@ static void packet_obj_init(struct rte_mempool *mp, __attribute__((unused)) void
 	memset(pkt, 0, mp->elt_size);
 }
 
-
 //DPDK在我这个场景暂时没找到好的hash算法，现在简单用一个五元组相加。
-static inline uint32_t
-ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len,
-		uint32_t init_val)
+static inline uint32_t ipv4_hash_crc(const void *data, __rte_unused uint32_t data_len, uint32_t init_val)
 {
 	const struct ipv4_5tuple *k;
 
@@ -67,6 +68,7 @@ int create_flowtab(int socketid)
 	int ret;
 	char s[64];
 
+
 	/* 创建流hash表 */
 	snprintf(s, sizeof(s), "flowtab_hash_%d", socketid);
 	flow_hash_params.name = s;
@@ -82,12 +84,12 @@ int create_flowtab(int socketid)
 	packet_pool = rte_mempool_create("packet_pool",
 	PACKET_NUM, PACKET_SIZE, 0, 0, NULL, NULL, packet_obj_init, NULL, socketid, 0);
 	if (packet_pool == NULL) rte_exit(EXIT_FAILURE, "Create packet_pool mempool failed\n");
-	rte_mempool_dump(stdout, packet_pool);
+	//	rte_mempool_dump(stdout, packet_pool);
 
 	/* 为流结构创建内存池 ,为流结构分配内存  */
 	ipv4_flow_pool = rte_mempool_create("ipv4_flow_pool", IPV4_FLOW_ENTRIES, IPV4_FLOW_SIZE, 0, 0, NULL, NULL, ipv4_flow_obj_init, NULL, socketid, 0);
 	if (ipv4_flow_pool == NULL) rte_exit(EXIT_FAILURE, "Create ipv4_flow_pool mempool failed\n");
-	rte_mempool_dump(stdout, ipv4_flow_pool);
+	//	rte_mempool_dump(stdout, ipv4_flow_pool);
 
 	return socketid;
 }
@@ -149,6 +151,7 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	void *pkt_tmp;
 	void *ret_data;
 
+
 	//根据para 提取5元组作为key
 	struct ipv4_5tuple key;
 	key.ip_dst = para->dip_v4;
@@ -156,6 +159,7 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	key.port_dst = para->dport;
 	key.port_src = para->sport;
 	key.proto = para->proto;
+
 
 	//	printf("key: %u %u %u %u %u \n", key.ip_dst, key.ip_src, key.port_dst, key.port_src, key.proto);
 
@@ -179,10 +183,10 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 			printf("Error to get flowtab_pool buffer\n");
 			return NULL;
 		}
-		packet_t *pkt = (packet_t *)pkt_tmp;
+		packet_t *pkt = (packet_t *) pkt_tmp;
 		pkt->ehdr = rte_pktmbuf_mtod(mbuf, struct ether_hdr* );
 		pkt->ip_hdr = rte_pktmbuf_mtod_offset(mbuf, struct ipv4_hdr *, sizeof(struct ether_hdr));
-		pkt->tcp_hdr = (struct tcp_hdr *)((unsigned char *)pkt->ip_hdr + sizeof(struct ipv4_hdr));
+		pkt->tcp_hdr = (struct tcp_hdr *) ((unsigned char *) pkt->ip_hdr + sizeof(struct ipv4_hdr));
 		pkt->mbuf = mbuf;
 		pkt->next = NULL;
 
@@ -196,12 +200,12 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 		printf("Error to get flowtab_pool buffer\n");
 		return NULL;
 	}
-	packet_t *pkt = (packet_t *)pkt_tmp;
+	packet_t *pkt = (packet_t *) pkt_tmp;
 	pkt->ehdr = rte_pktmbuf_mtod(mbuf, struct ether_hdr* );
 	pkt->ip_hdr = rte_pktmbuf_mtod_offset(mbuf, struct ipv4_hdr *, sizeof(struct ether_hdr));
-   	pkt->tcp_hdr = (struct tcp_hdr *)((unsigned char *)pkt->ip_hdr + sizeof(struct ipv4_hdr));
-   	pkt->mbuf = mbuf;
-   	pkt->next = NULL;
+	pkt->tcp_hdr = (struct tcp_hdr *) ((unsigned char *) pkt->ip_hdr + sizeof(struct ipv4_hdr));
+	pkt->mbuf = mbuf;
+	pkt->next = NULL;
 
 	if (rte_mempool_get(ipv4_flow_pool, &flow_tmp) < 0)
 	{
@@ -221,6 +225,7 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	flow->appid = 0x0001; //后期完善,可以按端口做一个协议分类
 	flow->pkt_num++;
 	flow->pkt_queue = flow->pkt_queue_head = flow->last_pkt = pkt;
+
 
 	//新建一条流：将key/flow放入hash表
 	//step: 1
@@ -299,5 +304,47 @@ void print_flow_tab_info(int socketid)
 			printf("flow: %u %u %u %u %u \n", flow->sip, flow->dip, flow->sport, flow->dport, flow->proto);
 		}
 	}
-
 }
+
+void app_lcore_flow(struct app_lcore_params_flow *lp, uint32_t bsz_rd)
+{
+	uint32_t i;
+
+	for (i = 0; i < lp->n_rings_in; i++)
+	{
+		struct rte_ring *ring_in = lp->rings_in[i];
+		uint32_t j;
+		int ret;
+		ret = rte_ring_sc_dequeue_bulk(ring_in, (void **) lp->mbuf_in.array, bsz_rd);
+
+		if (unlikely(ret == -ENOENT))
+		{
+			continue;
+		}
+
+		for (j = 0; j < bsz_rd; j++)
+		{
+			struct rte_mbuf *mbuf = lp->mbuf_in.array[j];
+			packet_t pkt;
+			dissect_packet(mbuf, &pkt);
+			print_packet_info(&pkt);
+		}
+	}
+}
+
+//对tcp流进行管理
+void app_lcore_main_loop_flow(void)
+{
+	uint32_t lcore = rte_lcore_id();
+	struct app_lcore_params_flow *lp = &app.lcore_params[lcore].flow;
+	uint64_t i = 0;
+
+	uint32_t bsz_rd = app.burst_size_flow_read;
+
+	for (;;)
+	{
+		app_lcore_flow(lp, bsz_rd);
+		i++;
+	}
+}
+

@@ -140,7 +140,7 @@ static int parse_arg_rx(const char *arg)
 			return -6;
 		}
 		lp = &app.lcore_params[lcore];
-		if (lp->type == e_APP_LCORE_FLOW || lp->type == e_APP_LCORE_WORK) {
+		if (lp->type == e_APP_LCORE_FLOW || lp->type == e_APP_LCORE_DISSECTOR) {
 			return -7;
 		}
 		lp->type = e_APP_LCORE_IO;
@@ -295,7 +295,7 @@ void app_print_params(void)
 #endif
 
 #ifndef APP_ARG_FLOW_MAX_TUPLES
-#define APP_ARG_FLOW_MAX_TUPLES    APP_MAX_WORKER_LCORES
+#define APP_ARG_FLOW_MAX_TUPLES    APP_MAX_FLOW_LCORES
 #endif
 
 static int
@@ -328,7 +328,7 @@ parse_arg_flow(const char *arg)
 			return -4;
 		}
 		lp = &app.lcore_params[lcore];
-		if (lp->type == e_APP_LCORE_IO || lp->type == e_APP_LCORE_WORK) {
+		if (lp->type == e_APP_LCORE_IO || lp->type == e_APP_LCORE_DISSECTOR) {
 			return -5;
 		}
 		lp->type = e_APP_LCORE_FLOW;
@@ -418,6 +418,7 @@ int app_parse_args(int argc, char **argv)
 
 	app.burst_size_io_rx_read = APP_DEFAULT_BURST_SIZE_IO_RX_READ;
 	app.burst_size_io_rx_write = APP_DEFAULT_BURST_SIZE_IO_RX_WRITE;
+	app.burst_size_flow_read = APP_DEFAULT_BURST_SIZE_FLOW_READ;
 
 	if (optind >= 0)
 		argv[optind - 1] = prgname;

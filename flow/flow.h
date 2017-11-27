@@ -111,6 +111,8 @@ ipv4_flow_t *search_flow_ipv4(int socketid, flow_para_t *para);
 // delete ipv4-flow.
 void  del_flow_ipv4(int socketid, flow_para_t *para);
 
+/////////////////////////////////////////////////////////////////////////////////
+void app_lcore_main_loop_flow(void);
 
 #ifdef __cplusplus
 }
