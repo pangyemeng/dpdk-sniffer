@@ -18,10 +18,6 @@
 #define APP_MAX_RX_QUEUES_PER_NIC_PORT 128
 #endif
 
-#ifndef APP_MAX_TX_QUEUES_PER_NIC_PORT
-#define APP_MAX_TX_QUEUES_PER_NIC_PORT 128
-#endif
-
 #ifndef APP_MAX_IO_LCORES
 #define APP_MAX_IO_LCORES 16
 #endif
@@ -50,8 +46,6 @@
 #ifndef APP_MAX_FLOW_LCORES
 #define APP_MAX_FLOW_LCORES 1
 #endif
-
-
 
 /* Mempools */
 #ifndef APP_DEFAULT_MBUF_DATA_SIZE
@@ -166,7 +160,6 @@
 #if ((2 * APP_DEFAULT_BURST_SIZE_FLOW_READ) > APP_MBUF_ARRAY_SIZE)
 #error "APP_DEFAULT_BURST_SIZE_WORKER_READ is too big"
 #endif
-
 
 enum app_lcore_type {
 	e_APP_LCORE_DISABLED = 0,

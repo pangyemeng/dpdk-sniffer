@@ -8,6 +8,7 @@
 #include <rte_hash.h>
 #include <rte_hash_crc.h>
 #include <rte_mbuf.h>
+#include <rte_cycles.h>
 
 #include "../common/common.h"
 #include "../common/config.h"
@@ -33,6 +34,18 @@ struct rte_mempool * ipv4_flow_pool = NULL;
 struct rte_mempool * packet_pool = NULL;
 
 #define DEFAULT_HASH_FUNC       rte_hash_crc
+
+
+/* Per-port statistics struct */
+struct flow_statistics {
+	uint64_t rx;
+	uint64_t flow_num;
+} __rte_cache_aligned;
+struct flow_statistics flow_stat;
+
+#define MAX_TIMER_PERIOD 86400 /* 1 day max */
+/* A tsc-based timer responsible for triggering statistics printout */
+static uint64_t timer_period = 10; /* default period is 10 seconds */
 
 static void ipv4_flow_obj_init(struct rte_mempool *mp, __attribute__((unused)) void *arg, void *obj, unsigned i)
 {
@@ -90,6 +103,10 @@ int create_flowtab(int socketid)
 	ipv4_flow_pool = rte_mempool_create("ipv4_flow_pool", IPV4_FLOW_ENTRIES, IPV4_FLOW_SIZE, 0, 0, NULL, NULL, ipv4_flow_obj_init, NULL, socketid, 0);
 	if (ipv4_flow_pool == NULL) rte_exit(EXIT_FAILURE, "Create ipv4_flow_pool mempool failed\n");
 	//	rte_mempool_dump(stdout, ipv4_flow_pool);
+
+	//初始化打印流的定时器
+	/* convert to number of cycles */
+	timer_period *= rte_get_timer_hz();
 
 	return socketid;
 }
@@ -325,10 +342,26 @@ void app_lcore_flow(struct app_lcore_params_flow *lp, uint32_t bsz_rd)
 		for (j = 0; j < bsz_rd; j++)
 		{
 			struct rte_mbuf *mbuf = lp->mbuf_in.array[j];
+			ipv4_flow_t *flow;
+			//目前流位两个方向
 			packet_t pkt;
-			dissect_packet(mbuf, &pkt);
-			print_packet_info(&pkt);
+			if (dissect_packet(mbuf, &pkt))
+			{
+				flow_para_t para;
+				create_flow_para(pkt.ip_hdr, &para);
+				//暂紧考虑TCP协议
+				if (para.proto == IPPROTO_TCP)
+				{
+					flow = create_flow_ipv4(rte_socket_id(), &para, mbuf);
+					if(flow->state == FLOW_NEW)
+					{
+						flow_stat.flow_num++;
+						printf("ipv4 flow: %u %u %u %u %u \n", flow->pkt_num, flow->sip, flow->dip, flow->sport, flow->dport, flow->proto);
+					}
+				}
+			}
 		}
+		flow_stat.rx += bsz_rd;
 	}
 }
 
@@ -338,11 +371,36 @@ void app_lcore_main_loop_flow(void)
 	uint32_t lcore = rte_lcore_id();
 	struct app_lcore_params_flow *lp = &app.lcore_params[lcore].flow;
 	uint64_t i = 0;
-
+	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
 	uint32_t bsz_rd = app.burst_size_flow_read;
+
+	prev_tsc = 0;
+	timer_tsc = 0;
 
 	for (;;)
 	{
+		cur_tsc = rte_rdtsc();
+
+		diff_tsc = cur_tsc - prev_tsc;
+
+		/* if timer is enabled */
+		if (timer_period > 0) {
+
+			/* advance the timer */
+			timer_tsc += diff_tsc;
+
+			/* if timer has reached its timeout */
+			if (unlikely(timer_tsc >= timer_period)) {
+
+				/* do this only on master core */
+					printf("flow info : rx %lu flow_num %lu\n", flow_stat.rx, flow_stat.flow_num);
+					/* reset the timer */
+					timer_tsc = 0;
+			}
+
+		}
+		prev_tsc = cur_tsc;
+
 		app_lcore_flow(lp, bsz_rd);
 		i++;
 	}

@@ -44,11 +44,11 @@
 #include "common/init.h"
 #include "capture/capture.h"
 
-volatile bool force_quit;
 
 static void signal_handler(int signum)
 {
-	if (signum == SIGINT || signum == SIGTERM) {
+	if (signum == SIGINT || signum == SIGTERM)
+	{
 		printf("\n\nSignal %d received, preparing to exit...\n", signum);
 		force_quit = true;
 	}
@@ -64,20 +64,23 @@ int app_lcore_main_loop(__attribute__((unused)) void *arg)
 	lp = &app.lcore_params[lcore];
 
 	//接收包
-	if (lp->type == e_APP_LCORE_IO) {
+	if (lp->type == e_APP_LCORE_IO)
+	{
 		printf("Logical core %u (I/O) main loop.\n", lcore);
 		app_lcore_main_loop_io();
 	}
 
 	//流管理
-	if (lp->type == e_APP_LCORE_FLOW) {
+	if (lp->type == e_APP_LCORE_FLOW)
+	{
 		printf("Logical core %u (Flow Manage) main loop.\n", lcore);
 		app_lcore_main_loop_flow();
 	}
 
 	//包解析器
-	if (lp->type == e_APP_LCORE_DISSECTOR) {
-			printf("Logical core %u (Dissector) main loop.\n", lcore);
+	if (lp->type == e_APP_LCORE_DISSECTOR)
+	{
+		printf("Logical core %u (Dissector) main loop.\n", lcore);
 	}
 	return 0;
 }
@@ -91,8 +94,7 @@ int main(int argc, char **argv)
 
 	/* Initialise EAL*/
 	ret = rte_eal_init(argc, argv);
-	if (ret < 0)
-		rte_exit(EXIT_FAILURE, "Could not initialise EAL (%d)\n", ret);
+	if (ret < 0) rte_exit(EXIT_FAILURE, "Could not initialise EAL (%d)\n", ret);
 
 	force_quit = false;
 	signal(SIGINT, signal_handler);
@@ -103,7 +105,8 @@ int main(int argc, char **argv)
 
 	/* Parse application arguments (after the EAL ones) */
 	ret = app_parse_args(argc, argv);
-	if (ret < 0) {
+	if (ret < 0)
+	{
 		app_print_usage();
 		return -1;
 	}
@@ -112,8 +115,10 @@ int main(int argc, char **argv)
 
 	/* 创建线程，在每个逻辑核 */
 	rte_eal_mp_remote_launch(app_lcore_main_loop, NULL, CALL_MASTER);
-	RTE_LCORE_FOREACH_SLAVE(lcore) {
-		if (rte_eal_wait_lcore(lcore) < 0) {
+	RTE_LCORE_FOREACH_SLAVE(lcore)
+	{
+		if (rte_eal_wait_lcore(lcore) < 0)
+		{
 			return -1;
 		}
 	}
