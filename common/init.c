@@ -37,6 +37,7 @@
 #include <rte_ip.h>
 #include <rte_tcp.h>
 #include <rte_lpm.h>
+#include <rte_timer.h>
 
 #include "init.h"
 #include "config.h"

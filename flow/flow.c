@@ -8,6 +8,7 @@
 #include <rte_hash.h>
 #include <rte_hash_crc.h>
 #include <rte_mbuf.h>
+#include <rte_timer.h>
 #include <rte_cycles.h>
 
 #include "../common/common.h"
@@ -15,16 +16,15 @@
 #include "../dissector/packet.h"
 #include "../dissector/dissector.h"
 
-
 #include "flow.h"
 
 #define NB_SOCKETS 8
-#define FLOW_HASH_ENTRIES	1024
+#define FLOW_HASH_ENTRIES	10000
 
 #define PACKET_NUM  1024*1024
 #define PACKET_SIZE (sizeof(packet_t))
 
-#define IPV4_FLOW_ENTRIES  1024
+#define IPV4_FLOW_ENTRIES  10000
 #define IPV4_FLOW_SIZE (sizeof(ipv4_flow_t))
 
 typedef struct rte_hash lookup_struct_t;
@@ -35,6 +35,7 @@ struct rte_mempool * packet_pool = NULL;
 
 #define DEFAULT_HASH_FUNC       rte_hash_crc
 
+#define TIMER_RESOLUTION_CYCLES 20000000ULL /* around 10ms at 2 Ghz */
 
 /* Per-port statistics struct */
 struct flow_statistics {
@@ -45,7 +46,7 @@ struct flow_statistics flow_stat;
 
 #define MAX_TIMER_PERIOD 86400 /* 1 day max */
 /* A tsc-based timer responsible for triggering statistics printout */
-static uint64_t timer_period = 10; /* default period is 10 seconds */
+static uint64_t timer_period = 2; /* default period is 10 seconds */
 
 static void ipv4_flow_obj_init(struct rte_mempool *mp, __attribute__((unused)) void *arg, void *obj, unsigned i)
 {
@@ -81,7 +82,6 @@ int create_flowtab(int socketid)
 	int ret;
 	char s[64];
 
-
 	/* 创建流hash表 */
 	snprintf(s, sizeof(s), "flowtab_hash_%d", socketid);
 	flow_hash_params.name = s;
@@ -96,12 +96,18 @@ int create_flowtab(int socketid)
 	/* 为包创建内存池 ,为包结构分配内存  */
 	packet_pool = rte_mempool_create("packet_pool",
 	PACKET_NUM, PACKET_SIZE, 0, 0, NULL, NULL, packet_obj_init, NULL, socketid, 0);
-	if (packet_pool == NULL) rte_exit(EXIT_FAILURE, "Create packet_pool mempool failed\n");
+	if (packet_pool == NULL)
+	{
+		rte_exit(EXIT_FAILURE, "Create packet_pool mempool failed\n");
+	}
 	//	rte_mempool_dump(stdout, packet_pool);
 
 	/* 为流结构创建内存池 ,为流结构分配内存  */
 	ipv4_flow_pool = rte_mempool_create("ipv4_flow_pool", IPV4_FLOW_ENTRIES, IPV4_FLOW_SIZE, 0, 0, NULL, NULL, ipv4_flow_obj_init, NULL, socketid, 0);
-	if (ipv4_flow_pool == NULL) rte_exit(EXIT_FAILURE, "Create ipv4_flow_pool mempool failed\n");
+	if (ipv4_flow_pool == NULL)
+	{
+		rte_exit(EXIT_FAILURE, "Create ipv4_flow_pool mempool failed\n");
+	}
 	//	rte_mempool_dump(stdout, ipv4_flow_pool);
 
 	//初始化打印流的定时器
@@ -155,6 +161,20 @@ void create_flow_para(struct ipv4_hdr *ipv4_hdr, flow_para_t *para)
 	}
 }
 
+//流超时回调函数
+void flow_timeout(void *owner)
+{
+	ipv4_flow_t *flow = owner;
+	printf("flow timeout %lx , flow ext %lx\n", flow, flow->ext_data);
+	if(flow->state == FLOW_ALIVE)
+	{
+		printf("flow timeout: %u %u %u %u %u \n", flow->pkt_num, flow->sip, flow->dip, flow->sport, flow->dport, flow->proto);
+	}
+	//删除对应的流
+	del_flow_ipv4(flow->tabid, flow);
+}
+
+
 /*大于  0 表示流创建成功
  *返回 -1 表示参数无效
  *返回  -2 表示空间不足
@@ -167,7 +187,8 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	void *flow_tmp;
 	void *pkt_tmp;
 	void *ret_data;
-
+	uint64_t hz;
+	unsigned lcore_id;
 
 	//根据para 提取5元组作为key
 	struct ipv4_5tuple key;
@@ -176,7 +197,6 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	key.port_dst = para->dport;
 	key.port_src = para->sport;
 	key.proto = para->proto;
-
 
 	//	printf("key: %u %u %u %u %u \n", key.ip_dst, key.ip_src, key.port_dst, key.port_src, key.proto);
 
@@ -236,21 +256,31 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	flow->sip = para->sip_v4;
 	flow->dport = para->dport;
 	flow->sport = para->sport;
-	flow->state = 1;
 	flow->proto = para->proto;
-	flow->tabid = ret;
+	flow->tabid = socketid;
 	flow->appid = 0x0001; //后期完善,可以按端口做一个协议分类
 	flow->pkt_num++;
 	flow->pkt_queue = flow->pkt_queue_head = flow->last_pkt = pkt;
 
-
+	//定时器初始化
+	rte_timer_init(&flow->timer_id);
+	hz = rte_get_timer_hz();
+	lcore_id = rte_lcore_id();
+	printf("flow addr %lx , flow ext %lx\n", flow, flow->ext_data);
+	//默认3s
+	ret = rte_timer_reset(&flow->timer_id, hz*3, SINGLE, lcore_id, flow_timeout, flow);
+	if (ret < 0)
+	{
+		rte_exit(1, "Failed to reset flush job timer for lcore %u: %s",
+					lcore_id, rte_strerror(-ret));
+	}
 	//新建一条流：将key/flow放入hash表
 	//step: 1
 	ret = rte_hash_add_key_data(flow_lookup_struct[socketid], &key, (void *) flow);
 	if (ret < 0)
 	{
-		rte_exit(EXIT_FAILURE, "Unable to add entry to the"
-			"flow hash on socket %d, return error -EINVAL\n", socketid);
+		rte_exit(EXIT_FAILURE, "Unable to add entry to the "
+			"flow hash on socket %d, return error (%d)\n", socketid, ret);
 	}
 	return flow;
 }
@@ -287,17 +317,40 @@ ipv4_flow_t *search_flow_ipv4(int socketid, flow_para_t *para)
 	return NULL;
 }
 
-void del_flow_ipv4(int socketid, flow_para_t *para)
+//这里有一个并发访问的问题
+void del_flow_ipv4(int socketid, ipv4_flow_t *flow)
 {
 	int ret;
 	//根据para 提取5元组作为key
 	struct ipv4_5tuple key;
-	key.ip_dst = para->dip_v4;
-	key.ip_src = para->sip_v4;
-	key.port_dst = para->dport;
-	key.port_src = para->sport;
-	key.proto = para->proto;
-	rte_hash_del_key(flow_lookup_struct[socketid], (const void *) &key);
+
+	key.ip_dst = flow->dip;
+	key.ip_src = flow->sip;
+	key.port_dst = flow->dport;
+	key.port_src = flow->sport;
+	key.proto = flow->proto;
+
+	//删除hash表中的key
+	ret = rte_hash_del_key(flow_lookup_struct[socketid], (const void *) &key);
+	if (ret < 0)
+	{
+		rte_exit(EXIT_FAILURE, "Unable to add entry to the "
+			"flow hash on socket %d, return error (%d)\n", socketid, ret);
+	}
+	//删除流表中的packet_t和mbuf
+	packet_t *head = flow->pkt_queue_head;
+	packet_t *tmp = NULL;
+	while(head)
+	{
+		tmp = head;
+		head = head->next;
+		//销毁mbuf结构
+		rte_pktmbuf_free(tmp->mbuf);
+		//将packet_t还回内存池
+		rte_mempool_put(packet_pool, tmp);
+	}
+	//删除流表结构
+	rte_mempool_put(ipv4_flow_pool, flow);
 }
 
 void print_flow_tab_info(int socketid)
@@ -373,6 +426,7 @@ void app_lcore_main_loop_flow(void)
 	uint64_t i = 0;
 	uint64_t prev_tsc, diff_tsc, cur_tsc, timer_tsc;
 	uint32_t bsz_rd = app.burst_size_flow_read;
+	uint64_t prev_tsc_timer = 0, cur_tsc_timer, diff_tsc_timer;
 
 	prev_tsc = 0;
 	timer_tsc = 0;
@@ -383,6 +437,7 @@ void app_lcore_main_loop_flow(void)
 
 		diff_tsc = cur_tsc - prev_tsc;
 
+#if 0
 		/* if timer is enabled */
 		if (timer_period > 0) {
 
@@ -397,12 +452,20 @@ void app_lcore_main_loop_flow(void)
 					/* reset the timer */
 					timer_tsc = 0;
 			}
-
 		}
 		prev_tsc = cur_tsc;
+#endif
 
 		app_lcore_flow(lp, bsz_rd);
+
 		i++;
+
+		cur_tsc_timer = rte_rdtsc();
+		diff_tsc_timer = cur_tsc_timer - prev_tsc_timer;
+		if (diff_tsc > TIMER_RESOLUTION_CYCLES) {
+			rte_timer_manage();
+			prev_tsc_timer = cur_tsc_timer;
+		}
 	}
 }
 

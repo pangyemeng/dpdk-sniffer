@@ -53,7 +53,7 @@
 #endif
 
 #ifndef APP_DEFAULT_MEMPOOL_BUFFERS
-#define APP_DEFAULT_MEMPOOL_BUFFERS   8192 * 1
+#define APP_DEFAULT_MEMPOOL_BUFFERS   8192 * 2
 #endif
 
 #ifndef APP_DEFAULT_MEMPOOL_CACHE_SIZE
@@ -141,25 +141,31 @@
 #endif
 
 #ifndef APP_DEFAULT_BURST_SIZE_IO_RX_READ
-#define APP_DEFAULT_BURST_SIZE_IO_RX_READ  144
+#define APP_DEFAULT_BURST_SIZE_IO_RX_READ  16
 #endif
 #if (APP_DEFAULT_BURST_SIZE_IO_RX_READ > APP_MBUF_ARRAY_SIZE)
 #error "APP_DEFAULT_BURST_SIZE_IO_RX_READ is too big"
 #endif
 
 #ifndef APP_DEFAULT_BURST_SIZE_IO_RX_WRITE
-#define APP_DEFAULT_BURST_SIZE_IO_RX_WRITE  144
+#define APP_DEFAULT_BURST_SIZE_IO_RX_WRITE  16
 #endif
 #if (APP_DEFAULT_BURST_SIZE_IO_RX_WRITE > APP_MBUF_ARRAY_SIZE)
 #error "APP_DEFAULT_BURST_SIZE_IO_RX_WRITE is too big"
 #endif
 
 #ifndef APP_DEFAULT_BURST_SIZE_FLOW_READ
-#define APP_DEFAULT_BURST_SIZE_FLOW_READ  144
+#define APP_DEFAULT_BURST_SIZE_FLOW_READ  16
 #endif
 #if ((2 * APP_DEFAULT_BURST_SIZE_FLOW_READ) > APP_MBUF_ARRAY_SIZE)
 #error "APP_DEFAULT_BURST_SIZE_WORKER_READ is too big"
 #endif
+
+#define false               0
+#define true                1
+typedef int bool;
+
+extern volatile bool force_quit;
 
 enum app_lcore_type {
 	e_APP_LCORE_DISABLED = 0,

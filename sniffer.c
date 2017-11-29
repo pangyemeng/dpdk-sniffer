@@ -38,12 +38,14 @@
 #include <rte_ip.h>
 #include <rte_tcp.h>
 #include <rte_lpm.h>
+#include <rte_timer.h>
 
-#include "common/config.h"
 #include "common/common.h"
+#include "common/config.h"
 #include "common/init.h"
 #include "capture/capture.h"
 
+volatile bool force_quit;
 
 static void signal_handler(int signum)
 {
@@ -94,7 +96,13 @@ int main(int argc, char **argv)
 
 	/* Initialise EAL*/
 	ret = rte_eal_init(argc, argv);
-	if (ret < 0) rte_exit(EXIT_FAILURE, "Could not initialise EAL (%d)\n", ret);
+	if (ret < 0)
+	{
+		rte_exit(EXIT_FAILURE, "Could not initialise EAL (%d)\n", ret);
+	}
+
+	/* 初始化定时器库  */
+	rte_timer_subsystem_init();
 
 	force_quit = false;
 	signal(SIGINT, signal_handler);
