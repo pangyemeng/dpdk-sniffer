@@ -123,6 +123,7 @@ int main(int argc, char **argv)
 
 	/* 创建线程，在每个逻辑核 */
 	rte_eal_mp_remote_launch(app_lcore_main_loop, NULL, CALL_MASTER);
+
 	RTE_LCORE_FOREACH_SLAVE(lcore)
 	{
 		if (rte_eal_wait_lcore(lcore) < 0)

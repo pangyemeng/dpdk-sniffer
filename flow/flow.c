@@ -51,7 +51,8 @@ static uint64_t timer_period = 2; /* default period is 10 seconds */
 static void ipv4_flow_obj_init(struct rte_mempool *mp, __attribute__((unused)) void *arg, void *obj, unsigned i)
 {
 	ipv4_flow_t * flow = (ipv4_flow_t *) obj;
-	memset(flow, 0, mp->elt_size);
+	memset(flow, 0, sizeof(ipv4_flow_t));
+	rte_timer_init(&flow->timer_id);
 }
 
 static void packet_obj_init(struct rte_mempool *mp, __attribute__((unused)) void *arg, void *obj, unsigned i)
@@ -67,7 +68,7 @@ static inline uint32_t ipv4_hash_crc(const void *data, __rte_unused uint32_t dat
 
 	k = data;
 
-	init_val = k->ip_dst + k->ip_src + k->port_dst + k->port_src;
+	init_val = k->ip_dst + k->ip_src + k->port_dst + k->port_src + k->proto;
 
 	return init_val;
 }
@@ -76,7 +77,7 @@ static inline uint32_t ipv4_hash_crc(const void *data, __rte_unused uint32_t dat
 int create_flowtab(int socketid)
 {
 	//做流判断的hash表
-	struct rte_hash_parameters flow_hash_params = { .name = NULL, .entries = FLOW_HASH_ENTRIES, .key_len = sizeof(struct ipv4_5tuple), .hash_func = ipv4_hash_crc, .hash_func_init_val = 0, };
+	struct rte_hash_parameters flow_hash_params = { .name = NULL, .entries = FLOW_HASH_ENTRIES, .key_len = sizeof(struct ipv4_5tuple), .hash_func = DEFAULT_HASH_FUNC, .hash_func_init_val = 0, };
 
 	unsigned i;
 	int ret;
@@ -92,7 +93,7 @@ int create_flowtab(int socketid)
 	{
 		rte_exit(EXIT_FAILURE, "Unable to create the flowtab hash on socket %d\n", socketid);
 	}
-
+	printf("Create the flowtab hash (%s) on socket %d\n", s, socketid);
 	/* 为包创建内存池 ,为包结构分配内存  */
 	packet_pool = rte_mempool_create("packet_pool",
 	PACKET_NUM, PACKET_SIZE, 0, 0, NULL, NULL, packet_obj_init, NULL, socketid, 0);
@@ -101,7 +102,7 @@ int create_flowtab(int socketid)
 		rte_exit(EXIT_FAILURE, "Create packet_pool mempool failed\n");
 	}
 	//	rte_mempool_dump(stdout, packet_pool);
-
+	printf("Create the packet_pool mempool on socket %d\n", socketid);
 	/* 为流结构创建内存池 ,为流结构分配内存  */
 	ipv4_flow_pool = rte_mempool_create("ipv4_flow_pool", IPV4_FLOW_ENTRIES, IPV4_FLOW_SIZE, 0, 0, NULL, NULL, ipv4_flow_obj_init, NULL, socketid, 0);
 	if (ipv4_flow_pool == NULL)
@@ -109,7 +110,7 @@ int create_flowtab(int socketid)
 		rte_exit(EXIT_FAILURE, "Create ipv4_flow_pool mempool failed\n");
 	}
 	//	rte_mempool_dump(stdout, ipv4_flow_pool);
-
+	printf("Create the ipv4_flow_pool mempool on socket %d\n", socketid);
 	//初始化打印流的定时器
 	/* convert to number of cycles */
 	timer_period *= rte_get_timer_hz();
@@ -162,9 +163,9 @@ void create_flow_para(struct ipv4_hdr *ipv4_hdr, flow_para_t *para)
 }
 
 //流超时回调函数
-void flow_timeout(void *owner)
+void flow_timeout(__rte_unused void *ptr_timer, void *owner)
 {
-	ipv4_flow_t *flow = owner;
+	ipv4_flow_t *flow = (ipv4_flow_t *)owner;
 	printf("flow timeout %lx , flow ext %lx\n", flow, flow->ext_data);
 	if(flow->state == FLOW_ALIVE)
 	{
@@ -183,6 +184,7 @@ void flow_timeout(void *owner)
 ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf *mbuf)
 {
 	int ret;
+	int pos = 0;
 	ipv4_flow_t *flow = NULL;
 	void *flow_tmp;
 	void *pkt_tmp;
@@ -198,18 +200,19 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	key.port_src = para->sport;
 	key.proto = para->proto;
 
-	//	printf("key: %u %u %u %u %u \n", key.ip_dst, key.ip_src, key.port_dst, key.port_src, key.proto);
+	printf("key: %u %u %u %u %u \n", key.ip_dst, key.ip_src, key.port_dst, key.port_src, key.proto);
 
 	//查找流是否存在
-	ret = rte_hash_lookup(flow_lookup_struct[socketid], (const void *) &key);
-	if (ret >= 0)
+	pos = rte_hash_lookup(flow_lookup_struct[socketid], (const void *) &key);
+	if (pos >= 0)
 	{
+		printf("%d flow exist\n", pos);
 		//根据5元组key查到对应的数据
 		ret = rte_hash_lookup_data(flow_lookup_struct[socketid], &key, &ret_data);
 		if (ret < 0)
 		{
-			printf("rte_hash_lookup_data error\n");
-			return -1;
+			printf("rte_hash_lookup_data fail return error %d\n", ret);
+			return NULL;
 		}
 		flow = (ipv4_flow_t *) ret_data;
 		flow->state = FLOW_EXIST;
@@ -229,6 +232,8 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 
 		flow->last_pkt->next = pkt;
 		flow->last_pkt = pkt;
+//		printf("flow addr %lx , flow ext %lx\n", flow, flow->ext_data);
+//		printf("arg %lx\n", flow->timer_id.arg);
 		return flow;
 	}
 	//从内存池中分配一个包的空间
@@ -262,22 +267,22 @@ ipv4_flow_t * create_flow_ipv4(int socketid, flow_para_t *para, struct rte_mbuf 
 	flow->pkt_num++;
 	flow->pkt_queue = flow->pkt_queue_head = flow->last_pkt = pkt;
 
-	//定时器初始化
-	rte_timer_init(&flow->timer_id);
+	//创建一条流就启动定时器
 	hz = rte_get_timer_hz();
 	lcore_id = rte_lcore_id();
-	printf("flow addr %lx , flow ext %lx\n", flow, flow->ext_data);
+//	printf("flow addr %lx , flow ext %lx\n", flow, flow->ext_data);
 	//默认3s
-	ret = rte_timer_reset(&flow->timer_id, hz*3, SINGLE, lcore_id, flow_timeout, flow);
+	ret = rte_timer_reset(&flow->timer_id, hz*3, SINGLE, lcore_id, (void(*)(struct rte_timer*, void*))
+			&flow_timeout, flow);
 	if (ret < 0)
 	{
 		rte_exit(1, "Failed to reset flush job timer for lcore %u: %s",
 					lcore_id, rte_strerror(-ret));
 	}
+//	printf("arg %lx\n", flow->timer_id.arg);
 	//新建一条流：将key/flow放入hash表
-	//step: 1
 	ret = rte_hash_add_key_data(flow_lookup_struct[socketid], &key, (void *) flow);
-	if (ret < 0)
+	if (ret != 0)
 	{
 		rte_exit(EXIT_FAILURE, "Unable to add entry to the "
 			"flow hash on socket %d, return error (%d)\n", socketid, ret);
@@ -330,12 +335,14 @@ void del_flow_ipv4(int socketid, ipv4_flow_t *flow)
 	key.port_src = flow->sport;
 	key.proto = flow->proto;
 
+	printf("del key: %u %u %u %u %u \n", key.ip_dst, key.ip_src, key.port_dst, key.port_src, key.proto);
 	//删除hash表中的key
 	ret = rte_hash_del_key(flow_lookup_struct[socketid], (const void *) &key);
 	if (ret < 0)
 	{
-		rte_exit(EXIT_FAILURE, "Unable to add entry to the "
+		printf("Unable to del entry to the "
 			"flow hash on socket %d, return error (%d)\n", socketid, ret);
+		return;
 	}
 	//删除流表中的packet_t和mbuf
 	packet_t *head = flow->pkt_queue_head;
@@ -406,7 +413,7 @@ void app_lcore_flow(struct app_lcore_params_flow *lp, uint32_t bsz_rd)
 				if (para.proto == IPPROTO_TCP)
 				{
 					flow = create_flow_ipv4(rte_socket_id(), &para, mbuf);
-					if(flow->state == FLOW_NEW)
+					if(flow != NULL && flow->state == FLOW_NEW)
 					{
 						flow_stat.flow_num++;
 						printf("ipv4 flow: %u %u %u %u %u \n", flow->pkt_num, flow->sip, flow->dip, flow->sport, flow->dport, flow->proto);
